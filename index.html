@@ -46,15 +46,6 @@
         <span class="selected-count" id="selectedCount">0件選択中</span>
       </div>
 
-      <div class="slide-count-row">
-        <label class="count-label">スライド枚数の目安</label>
-        <div class="count-controls">
-          <button class="count-btn" id="minusBtn" aria-label="減らす">−</button>
-          <span class="count-display"><span id="minCount">10</span>〜<span id="maxCount">15</span>枚</span>
-          <button class="count-btn" id="plusBtn" aria-label="増やす">＋</button>
-        </div>
-      </div>
-
       <button class="btn-primary" id="fetchBtn" disabled>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         見出しを取得してプロンプト生成
@@ -77,7 +68,7 @@
     <section class="card result-card" id="resultCard" hidden>
       <div class="step-badge">STEP 2</div>
       <h2 class="card-title">取得した見出し</h2>
-      <p class="card-desc">取得した見出し一覧です。不要な項目のチェックを外すと除外できます。</p>
+      <p class="card-desc">取得した見出し一覧です。不要な項目のチェックを外すと除外できます。16件以上の場合は15件ずつ複数パターンのプロンプトが生成されます。</p>
       <div class="headlines-list" id="headlinesList"></div>
       <div class="result-actions">
         <button class="btn-secondary" id="selectAllBtn">すべて選択</button>
@@ -95,11 +86,12 @@
       <h2 class="card-title">NotebookLM用プロンプト</h2>
       <p class="card-desc">以下をコピーしてNotebookLMの「ノートブックガイド」に貼り付けてください。</p>
 
-      <div class="group-summary" id="groupSummary"></div>
+      <!-- 複数パターン時のタブ -->
+      <div class="pattern-tabs" id="patternTabs" hidden></div>
 
       <div class="prompt-box">
         <div class="prompt-toolbar">
-          <span class="prompt-label">プロンプト</span>
+          <span class="prompt-label" id="promptLabel">プロンプト</span>
           <button class="copy-btn" id="copyBtn" aria-label="コピー">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
             コピー
@@ -108,10 +100,7 @@
         <pre class="prompt-output" id="promptOutput"></pre>
       </div>
 
-      <div class="slide-preview" id="slidePreview"></div>
-
       <div class="regen-row">
-        <button class="btn-secondary" id="regenBtn">グループ分けをやり直す</button>
         <button class="btn-secondary" id="resetBtn">最初からやり直す</button>
       </div>
     </section>
