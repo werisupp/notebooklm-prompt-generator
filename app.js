@@ -1,11 +1,11 @@
 /* ==============================================
    NotebookLM Prompt Generator — app.js
-   werisupp リポジトリ (article1〜16) 専用版
+   werisupp リポジトリ (article1～16) 専用版
    ============================================== */
 
 'use strict';
 
-// ── Config ───────────────────────────────────────
+// ── Config ────────────────────────────────────
 const REPO_OWNER     = 'werisupp';
 const REPO_NAME      = 'werisupp';
 const TOTAL_ARTICLES = 16;
@@ -21,15 +21,17 @@ const PROXIES = [
 const FETCH_TIMEOUT_MS = 12000;
 const RETRY_DELAY_MS   = 600;
 
-// ── State ────────────────────────────────────────
+// 1パターン当たりの最大見出し数
+const PATTERN_SIZE = 15;
+
+// ── State ────────────────────────────────────
 const state = {
   headlines: [],   // [{ id, tag, text, source, url }]
-  groups: [],
-  minSlides: 10,
-  maxSlides: 15,
+  patterns: [],    // 分割されたパターン配列 (15件ずつ)
+  currentPattern: 0,
 };
 
-// ── DOM refs ─────────────────────────────────────
+// ── DOM refs ─────────────────────────────────
 const $ = (id) => document.getElementById(id);
 const articleChecklist = $('articleChecklist');
 const bulkActions      = $('bulkActions');
@@ -45,17 +47,12 @@ const selectAllBtn     = $('selectAllBtn');
 const deselectAllBtn   = $('deselectAllBtn');
 const promptCard       = $('promptCard');
 const promptOutput     = $('promptOutput');
-const groupSummary     = $('groupSummary');
-const slidePreview     = $('slidePreview');
+const promptLabel      = $('promptLabel');
+const patternTabs      = $('patternTabs');
 const copyBtn          = $('copyBtn');
-const regenBtn         = $('regenBtn');
 const resetBtn         = $('resetBtn');
-const minCount         = $('minCount');
-const maxCount         = $('maxCount');
-const minusBtn         = $('minusBtn');
-const plusBtn          = $('plusBtn');
 
-// ── Theme toggle ─────────────────────────────────
+// ── Theme toggle ─────────────────────────────
 (function(){
   const toggle = document.querySelector('[data-theme-toggle]');
   const root   = document.documentElement;
@@ -71,7 +68,7 @@ const plusBtn          = $('plusBtn');
   });
 })();
 
-// ── fetchWithTimeout ─────────────────────────────
+// ── fetchWithTimeout ─────────────────────────
 function fetchWithTimeout(url, ms) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), ms);
@@ -79,9 +76,7 @@ function fetchWithTimeout(url, ms) {
     .finally(() => clearTimeout(timer));
 }
 
-// ── fetchViaProxies ───────────────────────────────
-// 複数プロキシを順番に試し、成功したHTMLテキストを返す
-// すべて失敗したらnullを返す
+// ── fetchViaProxies ───────────────────────────
 async function fetchViaProxies(rawUrl) {
   for (const makeProxyUrl of PROXIES) {
     const proxyUrl = makeProxyUrl(rawUrl);
@@ -89,7 +84,6 @@ async function fetchViaProxies(rawUrl) {
       const res = await fetchWithTimeout(proxyUrl, FETCH_TIMEOUT_MS);
       if (!res.ok) continue;
 
-      // allorigins は JSON { contents: "..." }、他はテキスト直接
       const contentType = res.headers.get('content-type') || '';
       let html;
       if (contentType.includes('application/json')) {
@@ -97,7 +91,6 @@ async function fetchViaProxies(rawUrl) {
         html = json.contents ?? null;
       } else {
         const text = await res.text();
-        // JSON 文字列として返ってくる場合もあるため試みる
         try {
           const json = JSON.parse(text);
           html = (typeof json === 'object' && json !== null)
@@ -122,7 +115,6 @@ function sleep(ms) {
 }
 
 // ── 起動時: チェックリストを静的に描画（フェッチなし）─
-// article1〜16 は1つだけ選択できる radio ボタンで描画
 function buildArticleChecklist() {
   articleChecklist.innerHTML = '';
   for (let num = 1; num <= TOTAL_ARTICLES; num++) {
@@ -135,7 +127,6 @@ function buildArticleChecklist() {
     `;
     articleChecklist.appendChild(label);
   }
-  // チェックリスト・一括操作を表示
   articleChecklist.removeAttribute('hidden');
   bulkActions.removeAttribute('hidden');
 
@@ -149,9 +140,8 @@ function updateFetchBtnState() {
   fetchBtn.disabled = checked === 0;
 }
 
-// ── 一括選択 / 解除（radio では「すべて選択」は非対応のため解除のみ有効）─
+// ── 一括選択 / 解除 ───────────────────────────
 $('selectAllArticles').addEventListener('click', () => {
-  // radio ボタンは1つしか選択できないため、すべて選択は動作しない
   updateFetchBtnState();
 });
 $('deselectAllArticles').addEventListener('click', () => {
@@ -159,25 +149,7 @@ $('deselectAllArticles').addEventListener('click', () => {
   updateFetchBtnState();
 });
 
-// ── スライド枚数コントロール ──────────────────────
-minusBtn.addEventListener('click', () => {
-  if (state.minSlides > 5) {
-    state.minSlides -= 1;
-    state.maxSlides -= 1;
-    minCount.textContent = state.minSlides;
-    maxCount.textContent = state.maxSlides;
-  }
-});
-plusBtn.addEventListener('click', () => {
-  if (state.maxSlides < 30) {
-    state.minSlides += 1;
-    state.maxSlides += 1;
-    minCount.textContent = state.minSlides;
-    maxCount.textContent = state.maxSlides;
-  }
-});
-
-// ── 「見出しを取得してプロンプト生成」ボタン ────────
+// ── 「見出しを取得してプロンプト生成」ボタン ──────
 fetchBtn.addEventListener('click', async () => {
   const checkedNums = [...articleChecklist.querySelectorAll('.article-checkbox:checked')]
     .map(cb => +cb.dataset.num);
@@ -209,7 +181,7 @@ fetchBtn.addEventListener('click', async () => {
       const headings = extractHeadings(html);
       if (headings.length === 0) {
         console.warn(`article${num}.html から見出しを抽出できませんでした（HTML取得は成功）`);
-        failedArticles.push(`article${num}（見出し0件）`);
+        failedArticles.push(`article${num}（見出で0件）`);
       }
       headings.forEach(({ tag, text }) => {
         state.headlines.push({
@@ -227,13 +199,12 @@ fetchBtn.addEventListener('click', async () => {
         ? `\n失敗した記事: ${failedArticles.join(', ')}`
         : '';
       throw new Error(
-        '選択した記事から見出し（h2〜h4）を取得できませんでした。' +
+        '選択した記事から見出し（h2～h4）を取得できませんでした。' +
         '記事にh2/h3/h4タグが含まれているか確認してください。' +
         detail
       );
     }
 
-    // 一部失敗した場合は警告表示
     if (failedArticles.length > 0) {
       showError(`以下の記事の取得または抽出に失敗しました（他の記事は正常に処理されました）:\n${failedArticles.join(', ')}`);
     }
@@ -249,30 +220,13 @@ fetchBtn.addEventListener('click', async () => {
 });
 
 // ── h2/h3/h4 見出し抽出（DOMParser 使用） ────────
-//
-// 【article3.html などで抽出失敗する主な原因と対処】
-// 1. 見出しタグが複数行にまたがる場合 → 正規表現では行をまたいだマッチが難しい
-//    → DOMParser を使えばブラウザの HTML パーサーが正確に解釈してくれる
-// 2. 見出しタグ内に <span> <strong> などネストされたタグがある場合
-//    → DOMParser + element.textContent でタグを無視したテキストが取れる
-// 3. 属性（class, id, style など）が複雑で正規表現がマッチしない場合
-//    → DOMParser はすべての属性を無視してタグ種別だけで検索できる
-// 4. HTMLエンティティ（&amp; など）が入れ子になっている場合
-//    → DOMParser が自動デコードする
-// 5. プロキシから返ってきた HTML が Unicode エスケープされている場合
-//    → 下記で事前に unescape 処理を行う
-//
 function extractHeadings(rawHtml) {
-  // Unicode エスケープ（\uXXXX）が含まれる場合をデコード
   let html = rawHtml;
   try {
-    // JSON.parse でラップして \uXXXX を文字列に展開
     if (rawHtml.includes('\\u')) {
       html = JSON.parse('"' + rawHtml.replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"');
     }
-  } catch (_) {
-    // デコード失敗時はそのまま使用
-  }
+  } catch (_) {}
 
   const results = [];
   try {
@@ -280,18 +234,14 @@ function extractHeadings(rawHtml) {
     const doc = parser.parseFromString(html, 'text/html');
     const headings = doc.querySelectorAll('h2, h3, h4');
     headings.forEach((el) => {
-      const tag  = el.tagName.toLowerCase(); // "h2" / "h3" / "h4"
-      const text = el.textContent
-        .replace(/\s+/g, ' ')
-        .trim();
-      // 「この記事の内容」は除外
+      const tag  = el.tagName.toLowerCase();
+      const text = el.textContent.replace(/\s+/g, ' ').trim();
       if (text && text !== 'この記事の内容') {
         results.push({ tag, text });
       }
     });
   } catch (e) {
     console.error('DOMParser による見出し抽出に失敗:', e);
-    // フォールバック: 正規表現による抽出
     const re = /<(h[234])[^>]*>([\/\S\s]*?)<\/h[234]>/gi;
     let match;
     while ((match = re.exec(html)) !== null) {
@@ -308,7 +258,7 @@ function extractHeadings(rawHtml) {
   return results;
 }
 
-// ── 見出しリストを描画 ────────────────────────────
+// ── 見出しリストを描画 ────────────────────────
 const TAG_LABEL = { h2: 'H2', h3: 'H3', h4: 'H4' };
 const TAG_COLOR = {
   h2: 'var(--color-primary)',
@@ -346,7 +296,7 @@ deselectAllBtn.addEventListener('click', () => {
   headlinesList.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false);
 });
 
-// ── プロンプト生成 ────────────────────────────────
+// ── プロンプト生成 ──────────────────────────────
 generateBtn.addEventListener('click', () => {
   const checked = [...headlinesList.querySelectorAll('input[type=checkbox]:checked')]
     .map(cb => state.headlines.find(h => h.id === +cb.dataset.id))
@@ -354,56 +304,97 @@ generateBtn.addEventListener('click', () => {
 
   if (checked.length === 0) { showToast('最低1件の見出しを選択してください'); return; }
 
-  state.groups = groupHeadlines(checked, state.minSlides, state.maxSlides);
-  const prompt = buildPrompt(state.groups);
+  // 15件ずつパターンに分割
+  state.patterns = splitIntoPatterns(checked, PATTERN_SIZE);
+  state.currentPattern = 0;
 
-  promptOutput.textContent = prompt;
-  renderGroupSummary(state.groups);
-  renderSlidePreview(state.groups);
+  renderPatternTabs();
+  showPattern(0);
+
   promptCard.removeAttribute('hidden');
   promptCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 
-// ── グループ分けアルゴリズム ───────────────────────
-function groupHeadlines(headlines, minS, maxS) {
-  const n = headlines.length;
-  if (n <= maxS) return headlines.map(h => [h]);
-  const targetGroups = Math.min(maxS, Math.max(minS, Math.round(n / 2)));
-  return splitIntoGroups(headlines, targetGroups);
-}
-
-function splitIntoGroups(items, k) {
-  const n = items.length;
-  const groups = [];
-  const base = Math.floor(n / k);
-  let remainder = n % k;
-  let idx = 0;
-  for (let i = 0; i < k; i++) {
-    const size = base + (remainder-- > 0 ? 1 : 0);
-    if (size > 0) groups.push(items.slice(idx, idx + size));
-    idx += size;
+// ── 15件ずつパターンに分割 ──────────────────────
+// 例: 28件 → [#1～#15, #16～#28]
+// 例: 30件 → [#1～#15, #16～#30]
+function splitIntoPatterns(headlines, size) {
+  const patterns = [];
+  for (let i = 0; i < headlines.length; i += size) {
+    patterns.push(headlines.slice(i, i + size));
   }
-  return groups;
+  return patterns;
 }
 
-// ── プロンプト文字列を構築 ────────────────────────
-// 各 # 見出し直後の空行はなし（要件: # 各見出しの下の改行を削除）
-function buildPrompt(groups) {
-  const headlineLines = [];
-  let hNum = 1;
-  groups.forEach((group) => {
-    group.forEach((h) => {
-      const tag      = (h.tag || 'h2').toUpperCase();
-      const numStr   = String(hNum).padStart(2, '0');
-      headlineLines.push(`・${numStr}_ ${tag}_${h.text}`);
-      hNum++;
+// ── パターンタブ描画 ─────────────────────────────
+function renderPatternTabs() {
+  const count = state.patterns.length;
+
+  if (count <= 1) {
+    // パターンが1つのときはタブ非表示
+    patternTabs.setAttribute('hidden', '');
+    patternTabs.innerHTML = '';
+    return;
+  }
+
+  patternTabs.innerHTML = '';
+  state.patterns.forEach((pattern, i) => {
+    const startNum = getGlobalStartNum(i);
+    const endNum   = startNum + pattern.length - 1;
+    const btn = document.createElement('button');
+    btn.className = 'pattern-tab-btn' + (i === 0 ? ' active' : '');
+    btn.textContent = `パターン${i + 1}  #${startNum}～#${endNum}`;
+    btn.dataset.index = i;
+    btn.addEventListener('click', () => {
+      state.currentPattern = i;
+      patternTabs.querySelectorAll('.pattern-tab-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      showPattern(i);
     });
+    patternTabs.appendChild(btn);
+  });
+  patternTabs.removeAttribute('hidden');
+}
+
+// パターンiの先頭見出しのグローバル番号（1始まり）
+function getGlobalStartNum(patternIndex) {
+  let n = 1;
+  for (let i = 0; i < patternIndex; i++) {
+    n += state.patterns[i].length;
+  }
+  return n;
+}
+
+// ── 指定パターンのプロンプトを表示 ────────────────
+function showPattern(index) {
+  const pattern  = state.patterns[index];
+  const startNum = getGlobalStartNum(index);
+  const endNum   = startNum + pattern.length - 1;
+
+  const prompt = buildPrompt(pattern, startNum);
+  promptOutput.textContent = prompt;
+
+  if (state.patterns.length > 1) {
+    promptLabel.textContent = `プロンプト （#${startNum}～#${endNum}）`;
+  } else {
+    promptLabel.textContent = 'プロンプト';
+  }
+}
+
+// ── プロンプト文字列を構築 ──────────────────────
+// startNum: 最初の見出しの連番 (#1 など)
+function buildPrompt(headlines, startNum) {
+  const headlineLines = headlines.map((h, i) => {
+    const tag    = (h.tag || 'h2').toUpperCase();
+    const num    = startNum + i;
+    const numStr = String(num).padStart(2, '0');
+    return `・${numStr}_ ${tag}_${h.text}`;
   });
 
   const lines = [];
 
   lines.push('# プロンプト構成');
-  lines.push('【# 目的】のために【# タスク】を実行してください。');
+  lines.push('「# 目的」のために「# タスク」を実行してください。');
   lines.push('');
 
   lines.push('# 目的');
@@ -411,11 +402,10 @@ function buildPrompt(groups) {
   lines.push('');
 
   lines.push('# タスク');
-  lines.push('・positive：【# 各見出し】に記載の各h2、h3、h4についての要点を、単語とイラストのみでまとめたスライドを【# デザイン条件】に従って作成。');
+  lines.push('・positive：「# 各見出し」に記載の各h2、h3、h4についての要点を、単語とイラストのみでまとめたスライドを「# デザイン条件」に従って作成。');
   lines.push('・negative：見出し（タイトル）の記載');
   lines.push('');
 
-  // ★ 「# 各見出し」直後の空行を削除（lines.push('') を入れない）
   lines.push('# 各見出し');
   headlineLines.forEach((l) => lines.push(l));
   lines.push('');
@@ -426,7 +416,7 @@ function buildPrompt(groups) {
   lines.push('・情報はカード状のボックスに分割し、「見出し」「本文」「箇条書き」「図解」が論理的な階層構造で並ぶレイアウトにしてください。');
   lines.push('');
   lines.push('■カラーテーマ（カラー指定）');
-  lines.push('・プライマリカラー（信頼感・見出し・リンク・囲み枠などの基調色）');
+  lines.push('・プライマリカラー（信頼感・見出し・リンク・囲い枠などの基調色）');
   lines.push('　-メインブルー：#005BAC');
   lines.push('　-ダークブルー：#004A8A（強調見出しに使用）');
   lines.push('・セカンダリカラー（成功・ポジティブ・Good例）：');
@@ -444,47 +434,14 @@ function buildPrompt(groups) {
   lines.push('・配色は上記パレットを基本とし、不要な色は増やさず、コントラストが高く可読性の良いデザインを優先してください。');
   lines.push('');
   lines.push('■ コンテンツ配置の制約（重要）');
-  lines.push('・各スライドのすべてのコンテンツ（テキスト・図解・アイコン・ボックス等）は、スライド下端から上方向へ6%以内のエリアには一切配置しないでください。');
-  lines.push('・言い換えると、スライド全体の高さを100%としたとき、上端0%〜下端94%の範囲内にすべての要素を収めてください。');
+  lines.push('・各スライドのすべてのコンテンツ（テキスト・図解・アイコン・ボックス等）は、スライド下端から上方向へ６％以内のエリアには一切配置しないでください。');
+  lines.push('・言い換えると、スライド全体の高さを100%としたとき、上端0%～下端94%の範囲内にすべての要素を収めてください。');
   lines.push('・下端6%のエリアは完全に空白（背景色のみ）にしてください。');
 
   return lines.join('\n');
 }
 
-// ── グループサマリー描画 ───────────────────────────
-const GROUP_COLORS = ['#01696f','#437a22','#006494','#7a39bb','#da7101','#a12c7b'];
-function renderGroupSummary(groups) {
-  groupSummary.innerHTML = groups.map((g, i) => {
-    const color = GROUP_COLORS[i % GROUP_COLORS.length];
-    return `<div class="group-chip">
-      <span class="group-chip-dot" style="background:${color}"></span>
-      グループ${i+1}：${g.length}件
-    </div>`;
-  }).join('');
-}
-
-// ── スライドプレビュー描画 ─────────────────────────
-function renderSlidePreview(groups) {
-  slidePreview.innerHTML = '<p style="font-size:var(--text-sm);font-weight:600;margin-bottom:var(--space-3)">スライド構成プレビュー</p>' +
-    groups.map((g, i) => {
-      const color = GROUP_COLORS[i % GROUP_COLORS.length];
-      const slidesHtml = g.map((h, hi) => `
-        <div class="slide-item">
-          <span class="slide-num" style="background:${color}20;color:${color}">${i+1}${g.length > 1 ? '-'+(hi+1) : ''}</span>
-          <span style="font-size:var(--text-xs);color:${color};margin-right:4px;font-weight:600">${(h.tag||'').toUpperCase()}</span>
-          <span>${escapeHtml(h.text)}</span>
-        </div>`).join('');
-      return `<div class="slide-group-block">
-        <div class="slide-group-header">
-          <span style="color:${color}">● グループ ${i+1}</span>
-          <span style="color:var(--color-text-faint)">${g.length}件</span>
-        </div>
-        <div class="slide-group-slides">${slidesHtml}</div>
-      </div>`;
-    }).join('');
-}
-
-// ── コピー ────────────────────────────────────────
+// ── コピー ──────────────────────────────────
 copyBtn.addEventListener('click', () => {
   const text = promptOutput.textContent;
   navigator.clipboard.writeText(text).then(() => {
@@ -508,18 +465,17 @@ copyBtn.addEventListener('click', () => {
   });
 });
 
-// ── Regen / Reset ─────────────────────────────────
-regenBtn.addEventListener('click', () => generateBtn.click());
+// ── Reset ────────────────────────────────────
 resetBtn.addEventListener('click', () => {
   state.headlines = [];
-  state.groups    = [];
+  state.patterns  = [];
   resultCard.setAttribute('hidden', '');
   promptCard.setAttribute('hidden', '');
   hideError();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 });
 
-// ── Helpers ───────────────────────────────────────
+// ── Helpers ───────────────────────────────────
 function escapeHtml(str) {
   if (!str) return '';
   return str
