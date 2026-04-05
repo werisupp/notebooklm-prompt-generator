@@ -1,0 +1,2 @@
+# notebooklm-prompt-generator
+article番号から見出しを自動取得し、NotebookLM用スライドプロンプトを生成するツール
