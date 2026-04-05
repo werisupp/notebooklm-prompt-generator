@@ -9,7 +9,6 @@
 const REPO_OWNER     = 'werisupp';
 const REPO_NAME      = 'werisupp';
 const TOTAL_ARTICLES = 16;
-// GitHub Raw ベースURL
 const RAW_BASE = `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/`;
 
 // ── CORSプロキシ（優先順に試行） ─────────────────
@@ -26,31 +25,32 @@ const PATTERN_SIZE = 15;
 
 // ── State ────────────────────────────────────
 const state = {
-  headlines: [],   // [{ id, tag, text, source, url }]
-  patterns: [],    // 分割されたパターン配列 (15件ずつ)
+  headlines: [],
+  patterns: [],
   currentPattern: 0,
 };
 
 // ── DOM refs ─────────────────────────────────
 const $ = (id) => document.getElementById(id);
-const articleChecklist = $('articleChecklist');
-const bulkActions      = $('bulkActions');
-const selectedCount    = $('selectedCount');
-const fetchBtn         = $('fetchBtn');
-const loadingArea      = $('loadingArea');
-const errorArea        = $('errorArea');
-const errorMsg         = $('errorMsg');
-const resultCard       = $('resultCard');
-const headlinesList    = $('headlinesList');
-const generateBtn      = $('generateBtn');
-const selectAllBtn     = $('selectAllBtn');
-const deselectAllBtn   = $('deselectAllBtn');
-const promptCard       = $('promptCard');
-const promptOutput     = $('promptOutput');
-const promptLabel      = $('promptLabel');
-const patternTabs      = $('patternTabs');
-const copyBtn          = $('copyBtn');
-const resetBtn         = $('resetBtn');
+const articleChecklist  = $('articleChecklist');
+const bulkActions       = $('bulkActions');
+const selectedCount     = $('selectedCount');
+const fetchBtn          = $('fetchBtn');
+const loadingArea       = $('loadingArea');
+const errorArea         = $('errorArea');
+const errorMsg          = $('errorMsg');
+const resultCard        = $('resultCard');
+const headlinesList     = $('headlinesList');
+const generateBtn       = $('generateBtn');
+const selectAllBtn      = $('selectAllBtn');
+const deselectAllBtn    = $('deselectAllBtn');
+const promptCard        = $('promptCard');
+const promptOutput      = $('promptOutput');
+const promptLabel       = $('promptLabel');
+const patternTabs       = $('patternTabs');
+const copyBtn           = $('copyBtn');
+const downloadJsonBtn   = $('downloadJsonBtn');
+const resetBtn          = $('resetBtn');
 
 // ── Theme toggle ─────────────────────────────
 (function(){
@@ -83,7 +83,6 @@ async function fetchViaProxies(rawUrl) {
     try {
       const res = await fetchWithTimeout(proxyUrl, FETCH_TIMEOUT_MS);
       if (!res.ok) continue;
-
       const contentType = res.headers.get('content-type') || '';
       let html;
       if (contentType.includes('application/json')) {
@@ -100,11 +99,8 @@ async function fetchViaProxies(rawUrl) {
           html = text;
         }
       }
-
       if (html && html.length > 0) return html;
-    } catch (_) {
-      // タイムアウト・ネットワークエラー → 次のプロキシへ
-    }
+    } catch (_) {}
     await sleep(RETRY_DELAY_MS);
   }
   return null;
@@ -114,7 +110,7 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// ── 起動時: チェックリストを静的に描画（フェッチなし）─
+// ── 起動時: チェックリストを静的に描画 ──────────
 function buildArticleChecklist() {
   articleChecklist.innerHTML = '';
   for (let num = 1; num <= TOTAL_ARTICLES; num++) {
@@ -129,7 +125,6 @@ function buildArticleChecklist() {
   }
   articleChecklist.removeAttribute('hidden');
   bulkActions.removeAttribute('hidden');
-
   articleChecklist.addEventListener('change', updateFetchBtnState);
   updateFetchBtnState();
 }
@@ -141,9 +136,7 @@ function updateFetchBtnState() {
 }
 
 // ── 一括選択 / 解除 ───────────────────────────
-$('selectAllArticles').addEventListener('click', () => {
-  updateFetchBtnState();
-});
+$('selectAllArticles').addEventListener('click', () => { updateFetchBtnState(); });
 $('deselectAllArticles').addEventListener('click', () => {
   articleChecklist.querySelectorAll('.article-checkbox').forEach(cb => cb.checked = false);
   updateFetchBtnState();
@@ -153,11 +146,7 @@ $('deselectAllArticles').addEventListener('click', () => {
 fetchBtn.addEventListener('click', async () => {
   const checkedNums = [...articleChecklist.querySelectorAll('.article-checkbox:checked')]
     .map(cb => +cb.dataset.num);
-
-  if (checkedNums.length === 0) {
-    showError('1件以上の記事を選択してください。');
-    return;
-  }
+  if (checkedNums.length === 0) { showError('1件以上の記事を選択してください。'); return; }
 
   setLoading(true);
   hideError();
@@ -170,44 +159,20 @@ fetchBtn.addEventListener('click', async () => {
     for (const num of checkedNums) {
       const rawUrl  = RAW_BASE + `article${num}.html`;
       const pageUrl = `https://github.com/${REPO_OWNER}/${REPO_NAME}/blob/main/article${num}.html`;
-
       const html = await fetchViaProxies(rawUrl);
-      if (!html) {
-        console.warn(`article${num}.html の取得に失敗しました`);
-        failedArticles.push(`article${num}`);
-        continue;
-      }
-
+      if (!html) { failedArticles.push(`article${num}`); continue; }
       const headings = extractHeadings(html);
-      if (headings.length === 0) {
-        console.warn(`article${num}.html から見出しを抽出できませんでした（HTML取得は成功）`);
-        failedArticles.push(`article${num}（見出で0件）`);
-      }
+      if (headings.length === 0) failedArticles.push(`article${num}（見出で0件）`);
       headings.forEach(({ tag, text }) => {
-        state.headlines.push({
-          id:     idCounter++,
-          tag,
-          text,
-          source: `article${num}`,
-          url:    pageUrl,
-        });
+        state.headlines.push({ id: idCounter++, tag, text, source: `article${num}`, url: pageUrl });
       });
     }
 
     if (state.headlines.length === 0) {
-      const detail = failedArticles.length > 0
-        ? `\n失敗した記事: ${failedArticles.join(', ')}`
-        : '';
-      throw new Error(
-        '選択した記事から見出し（h2～h4）を取得できませんでした。' +
-        '記事にh2/h3/h4タグが含まれているか確認してください。' +
-        detail
-      );
+      const detail = failedArticles.length > 0 ? `\n失敗した記事: ${failedArticles.join(', ')}` : '';
+      throw new Error('選択した記事から見出し（h2～h4）を取得できませんでした。' + detail);
     }
-
-    if (failedArticles.length > 0) {
-      showError(`以下の記事の取得または抽出に失敗しました（他の記事は正常に処理されました）:\n${failedArticles.join(', ')}`);
-    }
+    if (failedArticles.length > 0) showError(`以下の記事の取得に失敗しました:\n${failedArticles.join(', ')}`);
 
     renderHeadlines();
     resultCard.removeAttribute('hidden');
@@ -219,7 +184,7 @@ fetchBtn.addEventListener('click', async () => {
   }
 });
 
-// ── h2/h3/h4 見出し抽出（DOMParser 使用） ────────
+// ── h2/h3/h4 見出し抽出 ─────────────────────
 function extractHeadings(rawHtml) {
   let html = rawHtml;
   try {
@@ -227,31 +192,24 @@ function extractHeadings(rawHtml) {
       html = JSON.parse('"' + rawHtml.replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"');
     }
   } catch (_) {}
-
   const results = [];
   try {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
-    const headings = doc.querySelectorAll('h2, h3, h4');
-    headings.forEach((el) => {
+    doc.querySelectorAll('h2, h3, h4').forEach((el) => {
       const tag  = el.tagName.toLowerCase();
       const text = el.textContent.replace(/\s+/g, ' ').trim();
-      if (text && text !== 'この記事の内容') {
-        results.push({ tag, text });
-      }
+      if (text && text !== 'この記事の内容') results.push({ tag, text });
     });
   } catch (e) {
-    console.error('DOMParser による見出し抽出に失敗:', e);
-    const re = /<(h[234])[^>]*>([\/\S\s]*?)<\/h[234]>/gi;
+    const re = /<(h[234])[^>]*>([\S\s]*?)<\/h[234]>/gi;
     let match;
     while ((match = re.exec(html)) !== null) {
       const tag  = match[1].toLowerCase();
-      const text = match[2]
-        .replace(/<[^>]+>/g, '')
-        .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ')
-        .replace(/&[a-z]+;/g, '')
-        .replace(/\s+/g, ' ').trim();
+      const text = match[2].replace(/<[^>]+>/g, '')
+        .replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>')
+        .replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&nbsp;/g,' ')
+        .replace(/&[a-z]+;/g,'').replace(/\s+/g,' ').trim();
       if (text && text !== 'この記事の内容') results.push({ tag, text });
     }
   }
@@ -301,10 +259,8 @@ generateBtn.addEventListener('click', () => {
   const checked = [...headlinesList.querySelectorAll('input[type=checkbox]:checked')]
     .map(cb => state.headlines.find(h => h.id === +cb.dataset.id))
     .filter(Boolean);
-
   if (checked.length === 0) { showToast('最低1件の見出しを選択してください'); return; }
 
-  // 15件ずつパターンに分割
   state.patterns = splitIntoPatterns(checked, PATTERN_SIZE);
   state.currentPattern = 0;
 
@@ -316,8 +272,6 @@ generateBtn.addEventListener('click', () => {
 });
 
 // ── 15件ずつパターンに分割 ──────────────────────
-// 例: 28件 → [#1～#15, #16～#28]
-// 例: 30件 → [#1～#15, #16～#30]
 function splitIntoPatterns(headlines, size) {
   const patterns = [];
   for (let i = 0; i < headlines.length; i += size) {
@@ -328,15 +282,11 @@ function splitIntoPatterns(headlines, size) {
 
 // ── パターンタブ描画 ─────────────────────────────
 function renderPatternTabs() {
-  const count = state.patterns.length;
-
-  if (count <= 1) {
-    // パターンが1つのときはタブ非表示
+  if (state.patterns.length <= 1) {
     patternTabs.setAttribute('hidden', '');
     patternTabs.innerHTML = '';
     return;
   }
-
   patternTabs.innerHTML = '';
   state.patterns.forEach((pattern, i) => {
     const startNum = getGlobalStartNum(i);
@@ -356,12 +306,9 @@ function renderPatternTabs() {
   patternTabs.removeAttribute('hidden');
 }
 
-// パターンiの先頭見出しのグローバル番号（1始まり）
 function getGlobalStartNum(patternIndex) {
   let n = 1;
-  for (let i = 0; i < patternIndex; i++) {
-    n += state.patterns[i].length;
-  }
+  for (let i = 0; i < patternIndex; i++) n += state.patterns[i].length;
   return n;
 }
 
@@ -370,19 +317,13 @@ function showPattern(index) {
   const pattern  = state.patterns[index];
   const startNum = getGlobalStartNum(index);
   const endNum   = startNum + pattern.length - 1;
-
-  const prompt = buildPrompt(pattern, startNum);
-  promptOutput.textContent = prompt;
-
-  if (state.patterns.length > 1) {
-    promptLabel.textContent = `プロンプト （#${startNum}～#${endNum}）`;
-  } else {
-    promptLabel.textContent = 'プロンプト';
-  }
+  promptOutput.textContent = buildPrompt(pattern, startNum);
+  promptLabel.textContent = state.patterns.length > 1
+    ? `プロンプト （#${startNum}～#${endNum}）`
+    : 'プロンプト';
 }
 
 // ── プロンプト文字列を構築 ──────────────────────
-// startNum: 最初の見出しの連番 (#1 など)
 function buildPrompt(headlines, startNum) {
   const headlineLines = headlines.map((h, i) => {
     const tag    = (h.tag || 'h2').toUpperCase();
@@ -392,24 +333,19 @@ function buildPrompt(headlines, startNum) {
   });
 
   const lines = [];
-
   lines.push('# プロンプト構成');
   lines.push('「# 目的」のために「# タスク」を実行してください。');
   lines.push('');
-
   lines.push('# 目的');
   lines.push('・記事の各見出しの直下に概要を示した図解の差し込み');
   lines.push('');
-
   lines.push('# タスク');
   lines.push('・positive：「# 各見出し」に記載の各h2、h3、h4についての要点を、単語とイラストのみでまとめたスライドを「# デザイン条件」に従って作成。');
   lines.push('・negative：見出し（タイトル）の記載');
   lines.push('');
-
   lines.push('# 各見出し');
   headlineLines.forEach((l) => lines.push(l));
   lines.push('');
-
   lines.push('# デザイン条件');
   lines.push('■ デザインスタイル（スタイル指定）');
   lines.push('・全体は、白背景ベースのクリーンでモダンなビジネス向けインフォグラフィックにしてください。');
@@ -437,9 +373,47 @@ function buildPrompt(headlines, startNum) {
   lines.push('・各スライドのすべてのコンテンツ（テキスト・図解・アイコン・ボックス等）は、スライド下端から上方向へ６％以内のエリアには一切配置しないでください。');
   lines.push('・言い換えると、スライド全体の高さを100%としたとき、上端0%～下端94%の範囲内にすべての要素を収めてください。');
   lines.push('・下端6%のエリアは完全に空白（背景色のみ）にしてください。');
-
   return lines.join('\n');
 }
+
+// ── 現在パターンのJSON生成 ─────────────────────
+function buildPatternJson(patternIndex) {
+  const pattern  = state.patterns[patternIndex];
+  const startNum = getGlobalStartNum(patternIndex);
+  return {
+    pattern: patternIndex + 1,
+    total_patterns: state.patterns.length,
+    start_num: startNum,
+    end_num: startNum + pattern.length - 1,
+    headlines: pattern.map((h, i) => ({
+      num: startNum + i,
+      tag: (h.tag || 'h2').toUpperCase(),
+      text: h.text,
+      source: h.source || '',
+    })),
+  };
+}
+
+// ── JSONダウンロード ──────────────────────────
+downloadJsonBtn.addEventListener('click', () => {
+  const idx  = state.currentPattern;
+  const data = buildPatternJson(idx);
+  const startNum = data.start_num;
+  const endNum   = data.end_num;
+  const filename = `pattern${idx + 1}_headlines_${startNum}-${endNum}.json`;
+
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+
+  showToast(`📥 ${filename} をダウンロードしました`);
+});
 
 // ── コピー ──────────────────────────────────
 copyBtn.addEventListener('click', () => {
@@ -479,10 +453,8 @@ resetBtn.addEventListener('click', () => {
 function escapeHtml(str) {
   if (!str) return '';
   return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 function setLoading(on) {
   if (on) { loadingArea.removeAttribute('hidden'); fetchBtn.disabled = true; }
@@ -492,7 +464,7 @@ function showError(msg) { errorMsg.textContent = msg; errorArea.removeAttribute(
 function hideError()    { errorArea.setAttribute('hidden', ''); }
 function showToast(msg) {
   const t = document.createElement('div');
-  t.className  = 'toast';
+  t.className   = 'toast';
   t.textContent = msg;
   $('toastContainer').appendChild(t);
   setTimeout(() => {
@@ -501,5 +473,5 @@ function showToast(msg) {
   }, 2500);
 }
 
-// ── 初期化（フェッチなしで即座にチェックリスト表示）──
+// ── 初期化 ──────────────────────────────────
 buildArticleChecklist();

@@ -84,7 +84,7 @@
     <section class="card prompt-card" id="promptCard" hidden>
       <div class="step-badge">STEP 3</div>
       <h2 class="card-title">NotebookLM用プロンプト</h2>
-      <p class="card-desc">以下をコピーしてNotebookLMの「ノートブックガイド」に貼り付けてください。</p>
+      <p class="card-desc">パターンを選択してプロンプトをコピーしてください。また「JSONを保存」ボタンで見出しリストをダウンロードし、<code>notebooklm-slide-cleaner/headlines/</code> フォルダに置くとスライド画像のファイル命名に使用できます。</p>
 
       <!-- 複数パターン時のタブ -->
       <div class="pattern-tabs" id="patternTabs" hidden></div>
@@ -92,10 +92,16 @@
       <div class="prompt-box">
         <div class="prompt-toolbar">
           <span class="prompt-label" id="promptLabel">プロンプト</span>
-          <button class="copy-btn" id="copyBtn" aria-label="コピー">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-            コピー
-          </button>
+          <div class="prompt-toolbar-actions">
+            <button class="copy-btn" id="downloadJsonBtn" aria-label="JSONを保存">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              JSONを保存
+            </button>
+            <button class="copy-btn" id="copyBtn" aria-label="コピー">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              コピー
+            </button>
+          </div>
         </div>
         <pre class="prompt-output" id="promptOutput"></pre>
       </div>
