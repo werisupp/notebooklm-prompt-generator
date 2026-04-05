@@ -36,14 +36,8 @@
       <h2 class="card-title">記事を選択</h2>
       <p class="card-desc">スライド化したい記事を、1つ選択してください。</p>
 
-      <!-- ローディング中 -->
-      <div class="article-loading" id="articleLoading">
-        <div class="spinner" style="width:20px;height:20px;border-width:2px;"></div>
-        <span style="font-size:var(--text-sm);color:var(--color-text-muted)">記事一覧を取得中...</span>
-      </div>
-
       <!-- 記事チェックリスト -->
-      <div class="article-checklist" id="articleChecklist" hidden></div>
+      <div class="article-checklist" id="articleChecklist"></div>
 
       <!-- 一括操作 -->
       <div class="bulk-actions" id="bulkActions" hidden>
@@ -70,7 +64,7 @@
     <!-- ローディング -->
     <div class="loading-area" id="loadingArea" hidden>
       <div class="spinner"></div>
-      <p class="loading-text">記事情報を取得中...</p>
+      <p class="loading-text">取得中...</p>
     </div>
 
     <!-- エラー -->
