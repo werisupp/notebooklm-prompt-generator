@@ -30,31 +30,26 @@
 
   <main class="main-content">
 
-    <!-- Step 1: 入力 -->
+    <!-- Step 1: 記事選択 -->
     <section class="card input-card">
-      <div class="step-badge">Step 1</div>
-      <h2 class="card-title">記事を入力</h2>
-      <p class="card-desc">article番号またはURLを改行区切りで入力してください。複数記事をまとめてスライド化できます。</p>
+      <div class="step-badge">STEP 1</div>
+      <h2 class="card-title">記事を選択</h2>
+      <p class="card-desc">スライド化したい記事にチェックを入れてください。複数選択できます。</p>
 
-      <div class="media-tabs" role="tablist">
-        <button class="tab active" role="tab" data-media="note">note</button>
-        <button class="tab" role="tab" data-media="qiita">Qiita</button>
-        <button class="tab" role="tab" data-media="zenn">Zenn</button>
-        <button class="tab" role="tab" data-media="url">URL直接</button>
+      <!-- ローディング中 -->
+      <div class="article-loading" id="articleLoading">
+        <div class="spinner" style="width:20px;height:20px;border-width:2px;"></div>
+        <span style="font-size:var(--text-sm);color:var(--color-text-muted)">記事一覧を取得中...</span>
       </div>
 
-      <div class="input-area">
-        <label for="articleInput" class="input-label" id="inputLabel">article番号（例: m1234567890ab）</label>
-        <textarea
-          id="articleInput"
-          class="textarea"
-          placeholder="m1234567890ab
-4567890abcde
-8901234fghij"
-          rows="5"
-          aria-labelledby="inputLabel"
-        ></textarea>
-        <p class="input-hint" id="inputHint">note.com の記事番号を改行区切りで入力</p>
+      <!-- 記事チェックリスト -->
+      <div class="article-checklist" id="articleChecklist" hidden></div>
+
+      <!-- 一括操作 -->
+      <div class="bulk-actions" id="bulkActions" hidden>
+        <button class="btn-secondary btn-sm" id="selectAllArticles">すべて選択</button>
+        <button class="btn-secondary btn-sm" id="deselectAllArticles">すべて解除</button>
+        <span class="selected-count" id="selectedCount">0件選択中</span>
       </div>
 
       <div class="slide-count-row">
@@ -66,7 +61,7 @@
         </div>
       </div>
 
-      <button class="btn-primary" id="fetchBtn">
+      <button class="btn-primary" id="fetchBtn" disabled>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7,10 12,15 17,10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
         見出しを取得してプロンプト生成
       </button>
@@ -86,7 +81,7 @@
 
     <!-- Step 2: 取得結果 -->
     <section class="card result-card" id="resultCard" hidden>
-      <div class="step-badge">Step 2</div>
+      <div class="step-badge">STEP 2</div>
       <h2 class="card-title">取得した見出し</h2>
       <p class="card-desc">取得した見出し一覧です。不要な項目のチェックを外すと除外できます。</p>
       <div class="headlines-list" id="headlinesList"></div>
@@ -102,7 +97,7 @@
 
     <!-- Step 3: プロンプト出力 -->
     <section class="card prompt-card" id="promptCard" hidden>
-      <div class="step-badge">Step 3</div>
+      <div class="step-badge">STEP 3</div>
       <h2 class="card-title">NotebookLM用プロンプト</h2>
       <p class="card-desc">以下をコピーしてNotebookLMの「ノートブックガイド」に貼り付けてください。</p>
 

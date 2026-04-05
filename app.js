@@ -1,117 +1,54 @@
 /* ==============================================
    NotebookLM Prompt Generator — app.js
+   werisupp リポジトリ (article1〜16) 専用版
    ============================================== */
 
 'use strict';
 
+// ── Config ───────────────────────────────────────
+const REPO_OWNER   = 'werisupp';
+const REPO_NAME    = 'werisupp';
+const TOTAL_ARTICLES = 16;
+// GitHub Raw ベースURL
+const RAW_BASE = `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/`;
+// CORS プロキシ（Raw GitHub HTMLをフェッチするために使用）
+const PROXY = 'https://api.allorigins.win/get?url=';
+
 // ── State ────────────────────────────────────────
 const state = {
-  media: 'note',
-  headlines: [],     // [{ id, title, source, url }]
-  groups: [],        // [[headline, ...], ...]
+  articles: [],      // [{ num, title, url, loaded }]  全16件
+  headlines: [],     // [{ id, title, source, url }]   選択済み
+  groups: [],
   minSlides: 10,
   maxSlides: 15,
 };
 
-// ── CORS Proxy (public) ───────────────────────────
-const PROXY = 'https://api.allorigins.win/get?url=';
-
-// ── Media configs ────────────────────────────────
-const MEDIA_CONFIG = {
-  note: {
-    label: 'article番号（例: m1234567890ab）',
-    hint:  'note.com の記事番号を改行区切りで入力',
-    placeholder: 'm1234567890ab\n4567890abcde',
-    resolve: (raw) => {
-      raw = raw.trim();
-      if (raw.startsWith('http')) {
-        const m = raw.match(/note\.com\/[^/]+\/n\/([a-zA-Z0-9]+)/);
-        return m ? `https://note.com/api/v1/note/${m[1]}` : null;
-      }
-      const id = raw.replace(/^n/, '');
-      return `https://note.com/api/v1/note/n${id}`;
-    },
-    parse: async (raw) => {
-      const url = MEDIA_CONFIG.note.resolve(raw);
-      if (!url) throw new Error(`解析できないinput: ${raw}`);
-      const res = await fetchProxy(url);
-      const data = JSON.parse(res);
-      const d = data.data || data;
-      return { title: d.name || d.title || '(タイトル不明)', url: d.noteUrl || url, source: 'note' };
-    },
-  },
-  qiita: {
-    label: 'article ID（例: 1234567890abcdef0123）',
-    hint:  'Qiita の記事IDを改行区切りで入力',
-    placeholder: '1234567890abcdef0123',
-    parse: async (raw) => {
-      raw = raw.trim();
-      let id = raw;
-      if (raw.startsWith('http')) {
-        const m = raw.match(/qiita\.com\/[^/]+\/items\/([a-zA-Z0-9]+)/);
-        if (!m) throw new Error(`解析できないURL: ${raw}`);
-        id = m[1];
-      }
-      const res = await fetchProxy(`https://qiita.com/api/v2/items/${id}`);
-      const data = JSON.parse(res);
-      return { title: data.title || '(タイトル不明)', url: data.url || raw, source: 'Qiita' };
-    },
-  },
-  zenn: {
-    label: 'スラッグ または URL（例: my-article-slug）',
-    hint:  'Zenn の記事スラッグまたはURLを改行区切りで入力',
-    placeholder: 'my-article-slug',
-    parse: async (raw) => {
-      raw = raw.trim();
-      let slug = raw;
-      if (raw.startsWith('http')) {
-        const m = raw.match(/zenn\.dev\/[^/]+\/articles\/([a-zA-Z0-9_-]+)/);
-        if (!m) throw new Error(`解析できないURL: ${raw}`);
-        slug = m[1];
-      }
-      const res = await fetchProxy(`https://zenn.dev/api/articles/${slug}`);
-      const data = JSON.parse(res);
-      const a = data.article || data;
-      return { title: a.title || '(タイトル不明)', url: `https://zenn.dev${a.path || ''}`, source: 'Zenn' };
-    },
-  },
-  url: {
-    label: 'URL（例: https://example.com/article/1）',
-    hint:  '任意のURLを改行区切りで入力（OGP titleを取得）',
-    placeholder: 'https://example.com/article/123\nhttps://example.com/article/456',
-    parse: async (raw) => {
-      raw = raw.trim();
-      if (!raw.startsWith('http')) throw new Error(`URLの形式が正しくありません: ${raw}`);
-      const html = await fetchProxy(raw);
-      const title = extractOGTitle(html) || extractHTMLTitle(html) || raw;
-      return { title, url: raw, source: new URL(raw).hostname };
-    },
-  },
-};
-
 // ── DOM refs ─────────────────────────────────────
 const $ = (id) => document.getElementById(id);
-const fetchBtn     = $('fetchBtn');
-const articleInput = $('articleInput');
-const loadingArea  = $('loadingArea');
-const errorArea    = $('errorArea');
-const errorMsg     = $('errorMsg');
-const resultCard   = $('resultCard');
-const headlinesList= $('headlinesList');
-const generateBtn  = $('generateBtn');
-const selectAllBtn = $('selectAllBtn');
-const deselectAllBtn=$('deselectAllBtn');
-const promptCard   = $('promptCard');
-const promptOutput = $('promptOutput');
-const groupSummary = $('groupSummary');
-const slidePreview = $('slidePreview');
-const copyBtn      = $('copyBtn');
-const regenBtn     = $('regenBtn');
-const resetBtn     = $('resetBtn');
-const minCount     = $('minCount');
-const maxCount     = $('maxCount');
-const minusBtn     = $('minusBtn');
-plusBtn            = $('plusBtn');
+const articleLoading   = $('articleLoading');
+const articleChecklist = $('articleChecklist');
+const bulkActions      = $('bulkActions');
+const selectedCount    = $('selectedCount');
+const fetchBtn         = $('fetchBtn');
+const loadingArea      = $('loadingArea');
+const errorArea        = $('errorArea');
+const errorMsg         = $('errorMsg');
+const resultCard       = $('resultCard');
+const headlinesList    = $('headlinesList');
+const generateBtn      = $('generateBtn');
+const selectAllBtn     = $('selectAllBtn');
+const deselectAllBtn   = $('deselectAllBtn');
+const promptCard       = $('promptCard');
+const promptOutput     = $('promptOutput');
+const groupSummary     = $('groupSummary');
+const slidePreview     = $('slidePreview');
+const copyBtn          = $('copyBtn');
+const regenBtn         = $('regenBtn');
+const resetBtn         = $('resetBtn');
+const minCount         = $('minCount');
+const maxCount         = $('maxCount');
+const minusBtn         = $('minusBtn');
+const plusBtn          = $('plusBtn');
 
 // ── Theme toggle ─────────────────────────────────
 (function(){
@@ -129,20 +66,71 @@ plusBtn            = $('plusBtn');
   });
 })();
 
-// ── Media tab switching ───────────────────────────
-document.querySelectorAll('.tab').forEach(btn => {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-    btn.classList.add('active');
-    state.media = btn.dataset.media;
-    const cfg = MEDIA_CONFIG[state.media];
-    $('inputLabel').textContent = cfg.label;
-    $('inputHint').textContent  = cfg.hint;
-    articleInput.placeholder    = cfg.placeholder;
+// ── 起動時: 記事一覧を並列取得 ───────────────────
+async function loadArticleList() {
+  articleLoading.removeAttribute('hidden');
+  articleChecklist.setAttribute('hidden', '');
+  bulkActions.setAttribute('hidden', '');
+
+  const nums = Array.from({ length: TOTAL_ARTICLES }, (_, i) => i + 1);
+
+  const results = await Promise.allSettled(
+    nums.map(async (num) => {
+      const url = RAW_BASE + `article${num}.html`;
+      const html = await fetchProxy(url);
+      const title = extractHTMLTitle(html) || extractOGTitle(html) || `記事 ${num}`;
+      return { num, title, url: `https://github.com/${REPO_OWNER}/${REPO_NAME}/blob/main/article${num}.html` };
+    })
+  );
+
+  state.articles = results.map((r, i) => {
+    if (r.status === 'fulfilled') return r.value;
+    return { num: i + 1, title: `記事 ${i + 1}（取得失敗）`, url: RAW_BASE + `article${i+1}.html`, failed: true };
   });
+
+  articleLoading.setAttribute('hidden', '');
+  renderArticleChecklist();
+  articleChecklist.removeAttribute('hidden');
+  bulkActions.removeAttribute('hidden');
+}
+
+// ── 記事チェックリストを描画 ──────────────────────
+function renderArticleChecklist() {
+  articleChecklist.innerHTML = '';
+  state.articles.forEach((a) => {
+    const label = document.createElement('label');
+    label.className = 'article-check-item' + (a.failed ? ' article-check-item--failed' : '');
+    label.innerHTML = `
+      <input type="checkbox" class="article-checkbox" data-num="${a.num}"${a.failed ? ' disabled' : ''}>
+      <span class="article-check-num">記事${a.num}</span>
+      <span class="article-check-title">${escapeHtml(a.title)}</span>
+      ${a.failed ? '<span class="article-check-badge">取得失敗</span>' : ''}
+    `;
+    articleChecklist.appendChild(label);
+  });
+
+  // チェック変化 → ボタン状態更新
+  articleChecklist.addEventListener('change', updateFetchBtnState);
+  updateFetchBtnState();
+}
+
+function updateFetchBtnState() {
+  const checked = articleChecklist.querySelectorAll('.article-checkbox:checked').length;
+  selectedCount.textContent = `${checked}件選択中`;
+  fetchBtn.disabled = checked === 0;
+}
+
+// ── 一括選択 / 解除 ───────────────────────────────
+$('selectAllArticles').addEventListener('click', () => {
+  articleChecklist.querySelectorAll('.article-checkbox:not(:disabled)').forEach(cb => cb.checked = true);
+  updateFetchBtnState();
+});
+$('deselectAllArticles').addEventListener('click', () => {
+  articleChecklist.querySelectorAll('.article-checkbox').forEach(cb => cb.checked = false);
+  updateFetchBtnState();
 });
 
-// ── Slide count controls ──────────────────────────
+// ── スライド枚数コントロール ──────────────────────
 minusBtn.addEventListener('click', () => {
   if (state.minSlides > 5) {
     state.minSlides -= 1;
@@ -160,48 +148,43 @@ plusBtn.addEventListener('click', () => {
   }
 });
 
-// ── Fetch & parse articles ────────────────────────
+// ── 「見出しを取得してプロンプト生成」ボタン ────────
 fetchBtn.addEventListener('click', async () => {
-  const raw = articleInput.value.trim();
-  if (!raw) { showError('article番号またはURLを入力してください。'); return; }
+  const checkedNums = [...articleChecklist.querySelectorAll('.article-checkbox:checked')]
+    .map(cb => +cb.dataset.num);
 
-  const lines = raw.split(/[\n,]+/).map(l => l.trim()).filter(Boolean);
+  if (checkedNums.length === 0) {
+    showError('1件以上の記事を選択してください。');
+    return;
+  }
+
   setLoading(true);
   hideError();
 
   try {
-    const parser = MEDIA_CONFIG[state.media].parse;
-    const results = await Promise.allSettled(lines.map(line => parser(line)));
-
-    state.headlines = [];
-    const failed = [];
-    results.forEach((r, i) => {
-      if (r.status === 'fulfilled') {
-        state.headlines.push({ id: i, ...r.value });
-      } else {
-        failed.push(lines[i]);
-      }
-    });
+    const selected = state.articles.filter(a => checkedNums.includes(a.num));
+    state.headlines = selected.map((a, i) => ({
+      id: i,
+      title: a.title,
+      url: a.url,
+      source: `article${a.num}`,
+    }));
 
     if (state.headlines.length === 0) {
-      throw new Error('見出しを取得できませんでした。article番号・URLを確認してください。');
-    }
-
-    if (failed.length > 0) {
-      showToast(`⚠️ ${failed.length}件の取得に失敗しました`);
+      throw new Error('見出しを取得できませんでした。');
     }
 
     renderHeadlines();
     resultCard.removeAttribute('hidden');
     resultCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  } catch(e) {
+  } catch (e) {
     showError(e.message);
   } finally {
     setLoading(false);
   }
 });
 
-// ── Render headlines ──────────────────────────────
+// ── 見出しリストを描画 ────────────────────────────
 function renderHeadlines() {
   headlinesList.innerHTML = '';
   state.headlines.forEach(h => {
@@ -210,7 +193,9 @@ function renderHeadlines() {
     item.innerHTML = `
       <input type="checkbox" checked data-id="${h.id}">
       <div style="flex:1">
-        <div class="headline-meta">${escapeHtml(h.source)} ${h.url ? `— <a href="${escapeHtml(h.url)}" target="_blank" rel="noopener noreferrer" style="color:var(--color-text-faint)">${escapeHtml(h.url.slice(0,60))}...</a>` : ''}</div>
+        <div class="headline-meta">${escapeHtml(h.source)}
+          ${h.url ? ` — <a href="${escapeHtml(h.url)}" target="_blank" rel="noopener noreferrer" style="color:var(--color-text-faint)">${escapeHtml(h.url.slice(0,70))}...</a>` : ''}
+        </div>
         <div class="headline-text">${escapeHtml(h.title)}</div>
       </div>
       <span class="headline-tag">#${h.id + 1}</span>
@@ -226,7 +211,7 @@ deselectAllBtn.addEventListener('click', () => {
   headlinesList.querySelectorAll('input[type=checkbox]').forEach(cb => cb.checked = false);
 });
 
-// ── Generate prompt ───────────────────────────────
+// ── プロンプト生成 ────────────────────────────────
 generateBtn.addEventListener('click', () => {
   const checked = [...headlinesList.querySelectorAll('input[type=checkbox]:checked')]
     .map(cb => state.headlines.find(h => h.id === +cb.dataset.id))
@@ -244,25 +229,10 @@ generateBtn.addEventListener('click', () => {
   promptCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
 });
 
-// ── Auto grouping algorithm ───────────────────────
-/**
- * headlines を minSlides〜maxSlides 枚に収まるようグループ分けする。
- * 1スライド = 1見出し原則。過多の場合は関連見出しを1グループにまとめる。
- */
+// ── グループ分けアルゴリズム ───────────────────────
 function groupHeadlines(headlines, minS, maxS) {
   const n = headlines.length;
-
-  // 件数が範囲内ならそのまま1件ずつ
-  if (n >= minS && n <= maxS) {
-    return headlines.map(h => [h]);
-  }
-
-  // 件数が少なすぎる場合もそのまま
-  if (n < minS) {
-    return headlines.map(h => [h]);
-  }
-
-  // 件数が多すぎる場合: グループ数をmaxS以内に収める
+  if (n <= maxS) return headlines.map(h => [h]);
   const targetGroups = Math.min(maxS, Math.max(minS, Math.round(n / 2)));
   return splitIntoGroups(headlines, targetGroups);
 }
@@ -281,11 +251,10 @@ function splitIntoGroups(items, k) {
   return groups;
 }
 
-// ── Build prompt ──────────────────────────────────
+// ── プロンプト文字列を構築 ────────────────────────
 function buildPrompt(groups) {
   const totalSlides = groups.reduce((s, g) => s + g.length, 0);
   const lines = [];
-
   lines.push('以下の構成でNotebookLMのスライドを作成してください。');
   lines.push(`全体を${totalSlides}枚のスライドに収めてください。`);
   lines.push('各スライドには見出しと要点を3〜5箇条書きで記載してください。');
@@ -293,7 +262,6 @@ function buildPrompt(groups) {
   lines.push('');
   lines.push('【スライド構成】');
   lines.push('');
-
   let slideNum = 1;
   groups.forEach((group, gi) => {
     if (group.length === 1) {
@@ -302,8 +270,7 @@ function buildPrompt(groups) {
       lines.push(`  出典：${h.url || h.source}`);
       lines.push('');
     } else {
-      const groupTitle = `グループ${gi + 1}（${group.length}記事）`;
-      lines.push(`スライド${slideNum}：${groupTitle}`);
+      lines.push(`スライド${slideNum}：グループ${gi + 1}（${group.length}記事）`);
       group.forEach((h, hi) => {
         lines.push(`  ${hi + 1}. ${h.title}`);
         lines.push(`     出典：${h.url || h.source}`);
@@ -312,17 +279,15 @@ function buildPrompt(groups) {
     }
     slideNum++;
   });
-
   lines.push('【作成条件】');
   lines.push('- 各スライドは簡潔にまとめ、1スライドに詰め込みすぎないこと');
   lines.push('- 専門用語には簡単な説明を加えること');
   lines.push('- 聴衆はこのテーマの初学者を想定すること');
   lines.push('- 日本語で出力すること');
-
   return lines.join('\n');
 }
 
-// ── Render group summary ──────────────────────────
+// ── グループサマリー描画 ───────────────────────────
 const GROUP_COLORS = ['#01696f','#437a22','#006494','#7a39bb','#da7101','#a12c7b'];
 function renderGroupSummary(groups) {
   groupSummary.innerHTML = groups.map((g, i) => {
@@ -334,7 +299,7 @@ function renderGroupSummary(groups) {
   }).join('');
 }
 
-// ── Render slide preview ──────────────────────────
+// ── スライドプレビュー描画 ─────────────────────────
 function renderSlidePreview(groups) {
   slidePreview.innerHTML = '<p style="font-size:var(--text-sm);font-weight:600;margin-bottom:var(--space-3)">スライド構成プレビュー</p>' +
     groups.map((g, i) => {
@@ -354,7 +319,7 @@ function renderSlidePreview(groups) {
     }).join('');
 }
 
-// ── Copy ─────────────────────────────────────────
+// ── コピー ────────────────────────────────────────
 copyBtn.addEventListener('click', () => {
   const text = promptOutput.textContent;
   navigator.clipboard.writeText(text).then(() => {
@@ -366,7 +331,6 @@ copyBtn.addEventListener('click', () => {
       copyBtn.innerHTML = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg> コピー';
     }, 2000);
   }).catch(() => {
-    // fallback
     const ta = document.createElement('textarea');
     ta.value = text;
     ta.style.position = 'fixed';
@@ -380,13 +344,10 @@ copyBtn.addEventListener('click', () => {
 });
 
 // ── Regen / Reset ─────────────────────────────────
-regenBtn.addEventListener('click', () => {
-  generateBtn.click();
-});
+regenBtn.addEventListener('click', () => generateBtn.click());
 resetBtn.addEventListener('click', () => {
   state.headlines = [];
   state.groups = [];
-  articleInput.value = '';
   resultCard.setAttribute('hidden', '');
   promptCard.setAttribute('hidden', '');
   hideError();
@@ -401,27 +362,25 @@ async function fetchProxy(url) {
   return json.contents;
 }
 
-function extractOGTitle(html) {
-  const m = html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/);
-  return m ? m[1] : null;
-}
 function extractHTMLTitle(html) {
-  const m = html.match(/<title[^>]*>([^<]+)<\/title>/);
+  const m = html && html.match(/<title[^>]*>([^<]+)<\/title>/i);
   return m ? m[1].trim() : null;
+}
+function extractOGTitle(html) {
+  const m = html && html.match(/<meta[^>]+property=["']og:title["'][^>]+content=["']([^"']+)["']/i);
+  return m ? m[1] : null;
 }
 
 function escapeHtml(str) {
   if (!str) return '';
   return str.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-
 function setLoading(on) {
   if (on) { loadingArea.removeAttribute('hidden'); fetchBtn.disabled = true; }
-  else    { loadingArea.setAttribute('hidden',''); fetchBtn.disabled = false; }
+  else    { loadingArea.setAttribute('hidden','');  fetchBtn.disabled = false; }
 }
 function showError(msg) { errorMsg.textContent = msg; errorArea.removeAttribute('hidden'); }
 function hideError()    { errorArea.setAttribute('hidden',''); }
-
 function showToast(msg) {
   const t = document.createElement('div');
   t.className = 'toast';
@@ -432,3 +391,6 @@ function showToast(msg) {
     setTimeout(() => t.remove(), 300);
   }, 2500);
 }
+
+// ── 初期化 ────────────────────────────────────────
+loadArticleList();
