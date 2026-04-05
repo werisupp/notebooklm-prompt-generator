@@ -18,7 +18,7 @@ const PROXIES = [
   (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
   (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
 ];
-const FETCH_TIMEOUT_MS = 10000;
+const FETCH_TIMEOUT_MS = 12000;
 const RETRY_DELAY_MS   = 600;
 
 // ── State ────────────────────────────────────────
@@ -88,10 +88,27 @@ async function fetchViaProxies(rawUrl) {
     try {
       const res = await fetchWithTimeout(proxyUrl, FETCH_TIMEOUT_MS);
       if (!res.ok) continue;
-      const json = await res.json();
-      // allorigins → json.contents  /  codetabs → テキスト直接
-      const html = typeof json === 'string' ? json : (json.contents ?? null);
-      if (html) return html;
+
+      // allorigins は JSON { contents: "..." }、他はテキスト直接
+      const contentType = res.headers.get('content-type') || '';
+      let html;
+      if (contentType.includes('application/json')) {
+        const json = await res.json();
+        html = json.contents ?? null;
+      } else {
+        const text = await res.text();
+        // JSON 文字列として返ってくる場合もあるため試みる
+        try {
+          const json = JSON.parse(text);
+          html = (typeof json === 'object' && json !== null)
+            ? (json.contents ?? text)
+            : text;
+        } catch (_) {
+          html = text;
+        }
+      }
+
+      if (html && html.length > 0) return html;
     } catch (_) {
       // タイムアウト・ネットワークエラー → 次のプロキシへ
     }
@@ -118,9 +135,7 @@ function buildArticleChecklist() {
     `;
     articleChecklist.appendChild(label);
   }
-  // ローディング非表示 → チェックリスト表示
-  const articleLoading = $('articleLoading');
-  if (articleLoading) articleLoading.setAttribute('hidden', '');
+  // チェックリスト・一括操作を表示
   articleChecklist.removeAttribute('hidden');
   bulkActions.removeAttribute('hidden');
 
@@ -137,7 +152,6 @@ function updateFetchBtnState() {
 // ── 一括選択 / 解除（radio では「すべて選択」は非対応のため解除のみ有効）─
 $('selectAllArticles').addEventListener('click', () => {
   // radio ボタンは1つしか選択できないため、すべて選択は動作しない
-  // ボタンは残すが何もしない（UIの一貫性のため）
   updateFetchBtnState();
 });
 $('deselectAllArticles').addEventListener('click', () => {
@@ -179,6 +193,7 @@ fetchBtn.addEventListener('click', async () => {
 
   try {
     let idCounter = 0;
+    const failedArticles = [];
 
     for (const num of checkedNums) {
       const rawUrl  = RAW_BASE + `article${num}.html`;
@@ -186,12 +201,16 @@ fetchBtn.addEventListener('click', async () => {
 
       const html = await fetchViaProxies(rawUrl);
       if (!html) {
-        // 取得失敗でもスキップして続行（エラーはまとめて後で表示）
         console.warn(`article${num}.html の取得に失敗しました`);
+        failedArticles.push(`article${num}`);
         continue;
       }
 
       const headings = extractHeadings(html);
+      if (headings.length === 0) {
+        console.warn(`article${num}.html から見出しを抽出できませんでした（HTML取得は成功）`);
+        failedArticles.push(`article${num}（見出し0件）`);
+      }
       headings.forEach(({ tag, text }) => {
         state.headlines.push({
           id:     idCounter++,
@@ -204,7 +223,19 @@ fetchBtn.addEventListener('click', async () => {
     }
 
     if (state.headlines.length === 0) {
-      throw new Error('選択した記事から見出し（h2〜h4）を取得できませんでした。記事にh2/h3/h4タグが含まれているか確認してください。');
+      const detail = failedArticles.length > 0
+        ? `\n失敗した記事: ${failedArticles.join(', ')}`
+        : '';
+      throw new Error(
+        '選択した記事から見出し（h2〜h4）を取得できませんでした。' +
+        '記事にh2/h3/h4タグが含まれているか確認してください。' +
+        detail
+      );
+    }
+
+    // 一部失敗した場合は警告表示
+    if (failedArticles.length > 0) {
+      showError(`以下の記事の取得または抽出に失敗しました（他の記事は正常に処理されました）:\n${failedArticles.join(', ')}`);
     }
 
     renderHeadlines();
@@ -217,31 +248,62 @@ fetchBtn.addEventListener('click', async () => {
   }
 });
 
-// ── h2/h3/h4 見出し抽出 ──────────────────────────
-// 行頭のスペース・タブによるインデントがあっても対象となるよう対応
-// <h3>この記事の内容</h3> は除外する
-function extractHeadings(html) {
+// ── h2/h3/h4 見出し抽出（DOMParser 使用） ────────
+//
+// 【article3.html などで抽出失敗する主な原因と対処】
+// 1. 見出しタグが複数行にまたがる場合 → 正規表現では行をまたいだマッチが難しい
+//    → DOMParser を使えばブラウザの HTML パーサーが正確に解釈してくれる
+// 2. 見出しタグ内に <span> <strong> などネストされたタグがある場合
+//    → DOMParser + element.textContent でタグを無視したテキストが取れる
+// 3. 属性（class, id, style など）が複雑で正規表現がマッチしない場合
+//    → DOMParser はすべての属性を無視してタグ種別だけで検索できる
+// 4. HTMLエンティティ（&amp; など）が入れ子になっている場合
+//    → DOMParser が自動デコードする
+// 5. プロキシから返ってきた HTML が Unicode エスケープされている場合
+//    → 下記で事前に unescape 処理を行う
+//
+function extractHeadings(rawHtml) {
+  // Unicode エスケープ（\uXXXX）が含まれる場合をデコード
+  let html = rawHtml;
+  try {
+    // JSON.parse でラップして \uXXXX を文字列に展開
+    if (rawHtml.includes('\\u')) {
+      html = JSON.parse('"' + rawHtml.replace(/"/g, '\\"').replace(/\n/g, '\\n') + '"');
+    }
+  } catch (_) {
+    // デコード失敗時はそのまま使用
+  }
+
   const results = [];
-  // 行頭のインデント（スペース・タブ）を許容し、タグ内に属性がある場合も含めて対象とする
-  // [ \t]* で行頭のインデントを許容
-  const re = /[ \t]*<(h[234])[^>]*>([^<]*(?:<(?!\/h[234])[^>]*>[^<]*)*?)<\/h[234]>/gi;
-  let match;
-  while ((match = re.exec(html)) !== null) {
-    const tag  = match[1].toLowerCase();           // "h2" / "h3" / "h4"
-    const raw  = match[2];
-    // 内側のHTMLタグ（<span>等）とHTMLエンティティを除去してテキストのみ取得
-    const text = raw
-      .replace(/<[^>]+>/g, '')                     // タグ除去
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#39;/g, "'")
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&[a-z]+;/g, '')                    // その他エンティティ
-      .trim();
-    // 「この記事の内容」は除外
-    if (text && text !== 'この記事の内容') results.push({ tag, text });
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const headings = doc.querySelectorAll('h2, h3, h4');
+    headings.forEach((el) => {
+      const tag  = el.tagName.toLowerCase(); // "h2" / "h3" / "h4"
+      const text = el.textContent
+        .replace(/\s+/g, ' ')
+        .trim();
+      // 「この記事の内容」は除外
+      if (text && text !== 'この記事の内容') {
+        results.push({ tag, text });
+      }
+    });
+  } catch (e) {
+    console.error('DOMParser による見出し抽出に失敗:', e);
+    // フォールバック: 正規表現による抽出
+    const re = /<(h[234])[^>]*>([\/\S\s]*?)<\/h[234]>/gi;
+    let match;
+    while ((match = re.exec(html)) !== null) {
+      const tag  = match[1].toLowerCase();
+      const text = match[2]
+        .replace(/<[^>]+>/g, '')
+        .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, ' ')
+        .replace(/&[a-z]+;/g, '')
+        .replace(/\s+/g, ' ').trim();
+      if (text && text !== 'この記事の内容') results.push({ tag, text });
+    }
   }
   return results;
 }
@@ -325,13 +387,14 @@ function splitIntoGroups(items, k) {
 }
 
 // ── プロンプト文字列を構築 ────────────────────────
+// 各 # 見出し直後の空行はなし（要件: # 各見出しの下の改行を削除）
 function buildPrompt(groups) {
   const headlineLines = [];
   let hNum = 1;
   groups.forEach((group) => {
     group.forEach((h) => {
-      const tag      = (h.tag || 'h2').toUpperCase();         // H2 / H3 / H4
-      const numStr   = String(hNum).padStart(2, '0');         // 01, 02, ...
+      const tag      = (h.tag || 'h2').toUpperCase();
+      const numStr   = String(hNum).padStart(2, '0');
       headlineLines.push(`・${numStr}_ ${tag}_${h.text}`);
       hNum++;
     });
@@ -352,8 +415,8 @@ function buildPrompt(groups) {
   lines.push('・negative：見出し（タイトル）の記載');
   lines.push('');
 
+  // ★ 「# 各見出し」直後の空行を削除（lines.push('') を入れない）
   lines.push('# 各見出し');
-  lines.push('');
   headlineLines.forEach((l) => lines.push(l));
   lines.push('');
 
