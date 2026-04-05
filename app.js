@@ -216,11 +216,12 @@ fetchBtn.addEventListener('click', async () => {
 });
 
 // ── h2/h3/h4 見出し抽出 ──────────────────────────
-// HTMLテキストから <h2>〜<h4> を順番に抽出して返す
+// <h2>〜</h2> / <h3>〜</h3> / <h4>〜</h4> のみ対象
+// <h2 class=... > 等、タグ内に属性があるものは除外する
 function extractHeadings(html) {
   const results = [];
-  // タグ内の属性を含む <h2 ...>〜</h2> 形式に対応
-  const re = /<(h[234])(?:\s[^>]*)?>([^<]*(?:<(?!\/h[234])[^>]*>[^<]*)*?)<\/h[234]>/gi;
+  // 属性なしの開始タグ（<h2> <h3> <h4> のみ）にマッチ
+  const re = /<(h[234])>([^<]*(?:<(?!\/h[234])[^>]*>[^<]*)*?)<\/h[234]>/gi;
   let match;
   while ((match = re.exec(html)) !== null) {
     const tag  = match[1].toLowerCase();           // "h2" / "h3" / "h4"
@@ -325,7 +326,9 @@ function buildPrompt(groups) {
   let hNum = 1;
   groups.forEach((group) => {
     group.forEach((h) => {
-      headlineLines.push(`${hNum}. [${(h.tag || 'h2').toUpperCase()}] ${h.text}（出典：${h.url || h.source}）`);
+      const tag      = (h.tag || 'h2').toUpperCase();         // H2 / H3 / H4
+      const numStr   = String(hNum).padStart(2, '0');         // 01, 02, ...
+      headlineLines.push(`・${numStr}_ ${tag}_${h.text}`);
       hNum++;
     });
   });
@@ -346,7 +349,6 @@ function buildPrompt(groups) {
   lines.push('');
 
   lines.push('# 各見出し');
-  lines.push('[以下は指定した記事から自動抽出したh2〜h4の見出し一覧です]');
   lines.push('');
   headlineLines.forEach((l) => lines.push(l));
   lines.push('');
