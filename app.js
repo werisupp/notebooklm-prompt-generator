@@ -11,8 +11,16 @@ const REPO_NAME    = 'werisupp';
 const TOTAL_ARTICLES = 16;
 // GitHub Raw ベースURL
 const RAW_BASE = `https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/`;
-// CORS プロキシ（Raw GitHub HTMLをフェッチするために使用）
-const PROXY = 'https://api.allorigins.win/get?url=';
+
+// ── CORSプロキシ（優先順に試行、すべて失敗でDirect試行）────
+const PROXIES = [
+  (url) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+  (url) => `https://corsproxy.io/?${encodeURIComponent(url)}`,
+  (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+];
+const FETCH_TIMEOUT_MS = 8000;   // 1プロキシあたりのタイムアウト
+const RETRY_DELAY_MS   = 600;    // リトライ前の待機
+const PARALLEL_LIMIT   = 4;      // 同時フェッチ上限
 
 // ── State ────────────────────────────────────────
 const state = {
@@ -66,7 +74,57 @@ const plusBtn          = $('plusBtn');
   });
 })();
 
-// ── 起動時: 記事一覧を並列取得 ───────────────────
+// ── fetchWithTimeout ─────────────────────────────
+// タイムアウト付きfetch
+function fetchWithTimeout(url, ms) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  return fetch(url, { signal: controller.signal })
+    .finally(() => clearTimeout(timer));
+}
+
+// ── fetchViaProxies ───────────────────────────────
+// 複数プロキシを順番に試し、成功したHTMLを返す
+// 失敗した場合はnullを返す（例外を投げない）
+async function fetchViaProxies(rawUrl) {
+  for (const makeProxyUrl of PROXIES) {
+    const proxyUrl = makeProxyUrl(rawUrl);
+    try {
+      const res = await fetchWithTimeout(proxyUrl, FETCH_TIMEOUT_MS);
+      if (!res.ok) continue;
+      const json = await res.json();
+      // allorigins形式 → json.contents
+      // codetabs形式   → テキスト直接
+      const html = typeof json === 'string' ? json : (json.contents ?? null);
+      if (html) return html;
+    } catch (_) {
+      // タイムアウト・ネットワークエラー → 次のプロキシへ
+    }
+    await sleep(RETRY_DELAY_MS);
+  }
+  return null;
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// ── 並列制限付きmap ───────────────────────────────
+async function pLimit(items, concurrency, fn) {
+  const results = new Array(items.length);
+  let idx = 0;
+  async function worker() {
+    while (idx < items.length) {
+      const i = idx++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, worker);
+  await Promise.all(workers);
+  return results;
+}
+
+// ── 起動時: 記事一覧を並列取得（制限あり）─────────
 async function loadArticleList() {
   articleLoading.removeAttribute('hidden');
   articleChecklist.setAttribute('hidden', '');
@@ -74,19 +132,28 @@ async function loadArticleList() {
 
   const nums = Array.from({ length: TOTAL_ARTICLES }, (_, i) => i + 1);
 
-  const results = await Promise.allSettled(
-    nums.map(async (num) => {
-      const url = RAW_BASE + `article${num}.html`;
-      const html = await fetchProxy(url);
+  const results = await pLimit(nums, PARALLEL_LIMIT, async (num) => {
+    const url = RAW_BASE + `article${num}.html`;
+    try {
+      const html = await fetchViaProxies(url);
+      if (!html) throw new Error('all proxies failed');
       const title = extractHTMLTitle(html) || extractOGTitle(html) || `記事 ${num}`;
-      return { num, title, url: `https://github.com/${REPO_OWNER}/${REPO_NAME}/blob/main/article${num}.html` };
-    })
-  );
-
-  state.articles = results.map((r, i) => {
-    if (r.status === 'fulfilled') return r.value;
-    return { num: i + 1, title: `記事 ${i + 1}（取得失敗）`, url: RAW_BASE + `article${i+1}.html`, failed: true };
+      return {
+        num,
+        title,
+        url: `https://github.com/${REPO_OWNER}/${REPO_NAME}/blob/main/article${num}.html`,
+      };
+    } catch (_) {
+      return {
+        num,
+        title: `記事 ${num}（取得失敗）`,
+        url: RAW_BASE + `article${num}.html`,
+        failed: true,
+      };
+    }
   });
+
+  state.articles = results;
 
   articleLoading.setAttribute('hidden', '');
   renderArticleChecklist();
@@ -251,39 +318,72 @@ function splitIntoGroups(items, k) {
   return groups;
 }
 
-// ── プロンプト文字列を構築 ────────────────────────
+// ── プロンプト文字列を構築（# プロンプト構成） ───────
 function buildPrompt(groups) {
-  const totalSlides = groups.reduce((s, g) => s + g.length, 0);
-  const lines = [];
-  lines.push('以下の構成でNotebookLMのスライドを作成してください。');
-  lines.push(`全体を${totalSlides}枚のスライドに収めてください。`);
-  lines.push('各スライドには見出しと要点を3〜5箇条書きで記載してください。');
-  lines.push('最後のスライドはまとめ・結論にしてください。');
-  lines.push('');
-  lines.push('【スライド構成】');
-  lines.push('');
-  let slideNum = 1;
-  groups.forEach((group, gi) => {
-    if (group.length === 1) {
-      const h = group[0];
-      lines.push(`スライド${slideNum}：${h.title}`);
-      lines.push(`  出典：${h.url || h.source}`);
-      lines.push('');
-    } else {
-      lines.push(`スライド${slideNum}：グループ${gi + 1}（${group.length}記事）`);
-      group.forEach((h, hi) => {
-        lines.push(`  ${hi + 1}. ${h.title}`);
-        lines.push(`     出典：${h.url || h.source}`);
-      });
-      lines.push('');
-    }
-    slideNum++;
+  // 選択された見出しを番号付きリストに展開
+  const headlineLines = [];
+  let hNum = 1;
+  groups.forEach((group) => {
+    group.forEach((h) => {
+      headlineLines.push(`${hNum}. ${h.title}（出典：${h.url || h.source}）`);
+      hNum++;
+    });
   });
-  lines.push('【作成条件】');
-  lines.push('- 各スライドは簡潔にまとめ、1スライドに詰め込みすぎないこと');
-  lines.push('- 専門用語には簡単な説明を加えること');
-  lines.push('- 聴衆はこのテーマの初学者を想定すること');
-  lines.push('- 日本語で出力すること');
+
+  const lines = [];
+
+  // ─── プロンプト本文 ───────────────────────────
+  lines.push('# プロンプト構成');
+  lines.push('【# 目的】のために【# タスク】を実行してください。');
+  lines.push('');
+
+  // # 目的
+  lines.push('# 目的');
+  lines.push('・記事の各見出しの直下に概要を示した図解の差し込み');
+  lines.push('');
+
+  // # タスク
+  lines.push('# タスク');
+  lines.push('・positive：【# 各見出し】に記載の各h2、h3、h4についての要点を、単語とイラストのみでまとめたスライドを【# デザイン条件】に従って作成。');
+  lines.push('・negative：見出し（タイトル）の記載');
+  lines.push('');
+
+  // # 各見出し
+  lines.push('# 各見出し');
+  lines.push('[inex.htmlで指定した記事の見出し（h2〜h4）を指定した個数だけ順番に抽出]');
+  lines.push('');
+  headlineLines.forEach((l) => lines.push(l));
+  lines.push('');
+
+  // # デザイン条件
+  lines.push('# デザイン条件');
+  lines.push('■ デザインスタイル（スタイル指定）');
+  lines.push('・全体は、白背景ベースのクリーンでモダンなビジネス向けインフォグラフィックにしてください。');
+  lines.push('・情報はカード状のボックスに分割し、「見出し」「本文」「箇条書き」「図解」が論理的な階層構造で並ぶレイアウトにしてください。');
+  lines.push('');
+  lines.push('■カラーテーマ（カラー指定）');
+  lines.push('・プライマリカラー（信頼感・見出し・リンク・囲み枠などの基調色）');
+  lines.push('　-メインブルー：#005BAC');
+  lines.push('　-ダークブルー：#004A8A（強調見出しに使用）');
+  lines.push('・セカンダリカラー（成功・ポジティブ・Good例）：');
+  lines.push('　-グリーン：#28A745');
+  lines.push('　-ダークグリーン：#218838');
+  lines.push('・背景・テキスト：');
+  lines.push('　-全体背景：#FFFFFF（純白）');
+  lines.push('　-カードの淡い背景：#F8F9FA（light）、#E9ECEF（medium）');
+  lines.push('　-文字メイン：#333333');
+  lines.push('　-文字サブ：#6C757D');
+  lines.push('　-補助的な淡い文字・アイコン：#B2BEC3');
+  lines.push('');
+  lines.push('■全体トーン');
+  lines.push('・「信頼感」「プロフェッショナル」「読みやすさ」を重視したビジネスインフォグラフィックにしてください。');
+  lines.push('・配色は上記パレットを基本とし、不要な色は増やさず、コントラストが高く可読性の良いデザインを優先してください。');
+  lines.push('');
+  lines.push('■ コンテンツ配置の制約（重要）');
+  lines.push('・各スライドのすべてのコンテンツ（テキスト・図解・アイコン・ボックス等）は、スライド下端から上方向へ6%以内のエリアには一切配置しないでください。');
+  lines.push('・言い換えると、スライド全体の高さを100%としたとき、上端0%〜下端94%の範囲内にすべての要素を収めてください。');
+  lines.push('・下端6%のエリアは完全に空白（背景色のみ）にしてください。');
+
   return lines.join('\n');
 }
 
@@ -355,13 +455,6 @@ resetBtn.addEventListener('click', () => {
 });
 
 // ── Helpers ───────────────────────────────────────
-async function fetchProxy(url) {
-  const res = await fetch(PROXY + encodeURIComponent(url));
-  if (!res.ok) throw new Error(`HTTPエラー: ${res.status}`);
-  const json = await res.json();
-  return json.contents;
-}
-
 function extractHTMLTitle(html) {
   const m = html && html.match(/<title[^>]*>([^<]+)<\/title>/i);
   return m ? m[1].trim() : null;
