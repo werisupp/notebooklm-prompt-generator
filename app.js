@@ -105,13 +105,14 @@ function sleep(ms) {
 }
 
 // ── 起動時: チェックリストを静的に描画（フェッチなし）─
+// article1〜16 は1つだけ選択できる radio ボタンで描画
 function buildArticleChecklist() {
   articleChecklist.innerHTML = '';
   for (let num = 1; num <= TOTAL_ARTICLES; num++) {
     const label = document.createElement('label');
     label.className = 'article-check-item';
     label.innerHTML = `
-      <input type="checkbox" class="article-checkbox" data-num="${num}">
+      <input type="radio" name="articleRadio" class="article-checkbox" data-num="${num}">
       <span class="article-check-num">記事${num}</span>
       <span class="article-check-title">article${num}.html</span>
     `;
@@ -133,9 +134,10 @@ function updateFetchBtnState() {
   fetchBtn.disabled = checked === 0;
 }
 
-// ── 一括選択 / 解除 ───────────────────────────────
+// ── 一括選択 / 解除（radio では「すべて選択」は非対応のため解除のみ有効）─
 $('selectAllArticles').addEventListener('click', () => {
-  articleChecklist.querySelectorAll('.article-checkbox:not(:disabled)').forEach(cb => cb.checked = true);
+  // radio ボタンは1つしか選択できないため、すべて選択は動作しない
+  // ボタンは残すが何もしない（UIの一貫性のため）
   updateFetchBtnState();
 });
 $('deselectAllArticles').addEventListener('click', () => {
@@ -216,12 +218,13 @@ fetchBtn.addEventListener('click', async () => {
 });
 
 // ── h2/h3/h4 見出し抽出 ──────────────────────────
-// <h2>〜</h2> / <h3>〜</h3> / <h4>〜</h4> のみ対象
-// <h2 class=... > 等、タグ内に属性があるものは除外する
+// 行頭のスペース・タブによるインデントがあっても対象となるよう対応
+// <h3>この記事の内容</h3> は除外する
 function extractHeadings(html) {
   const results = [];
-  // 属性なしの開始タグ（<h2> <h3> <h4> のみ）にマッチ
-  const re = /<(h[234])>([^<]*(?:<(?!\/h[234])[^>]*>[^<]*)*?)<\/h[234]>/gi;
+  // 行頭のインデント（スペース・タブ）を許容し、タグ内に属性がある場合も含めて対象とする
+  // [ \t]* で行頭のインデントを許容
+  const re = /[ \t]*<(h[234])[^>]*>([^<]*(?:<(?!\/h[234])[^>]*>[^<]*)*?)<\/h[234]>/gi;
   let match;
   while ((match = re.exec(html)) !== null) {
     const tag  = match[1].toLowerCase();           // "h2" / "h3" / "h4"
@@ -237,7 +240,8 @@ function extractHeadings(html) {
       .replace(/&nbsp;/g, ' ')
       .replace(/&[a-z]+;/g, '')                    // その他エンティティ
       .trim();
-    if (text) results.push({ tag, text });
+    // 「この記事の内容」は除外
+    if (text && text !== 'この記事の内容') results.push({ tag, text });
   }
   return results;
 }
