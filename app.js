@@ -1,6 +1,6 @@
 /* ==============================================
    NotebookLM Prompt Generator — app.js
-   werisupp リポジトリ (article1～16) 専用版
+   werisupp リポジトリ (step1～16) 専用版
    ============================================== */
 
 'use strict';
@@ -118,8 +118,8 @@ function buildArticleChecklist() {
     label.className = 'article-check-item';
     label.innerHTML = `
       <input type="radio" name="articleRadio" class="article-checkbox" data-num="${num}">
-      <span class="article-check-num">記事${num}</span>
-      <span class="article-check-title">article${num}.html</span>
+      <span class="article-check-num">ステップ${num}</span>
+      <span class="article-check-title">step${num}.html</span>
     `;
     articleChecklist.appendChild(label);
   }
@@ -146,7 +146,7 @@ $('deselectAllArticles').addEventListener('click', () => {
 fetchBtn.addEventListener('click', async () => {
   const checkedNums = [...articleChecklist.querySelectorAll('.article-checkbox:checked')]
     .map(cb => +cb.dataset.num);
-  if (checkedNums.length === 0) { showError('1件以上の記事を選択してください。'); return; }
+  if (checkedNums.length === 0) { showError('1件以上のステップを選択してください。'); return; }
 
   setLoading(true);
   hideError();
@@ -157,22 +157,22 @@ fetchBtn.addEventListener('click', async () => {
     const failedArticles = [];
 
     for (const num of checkedNums) {
-      const rawUrl  = RAW_BASE + `article${num}.html`;
-      const pageUrl = `https://github.com/${REPO_OWNER}/${REPO_NAME}/blob/main/article${num}.html`;
+      const rawUrl  = RAW_BASE + `step${num}.html`;
+      const pageUrl = `https://github.com/${REPO_OWNER}/${REPO_NAME}/blob/main/step${num}.html`;
       const html = await fetchViaProxies(rawUrl);
-      if (!html) { failedArticles.push(`article${num}`); continue; }
+      if (!html) { failedArticles.push(`step${num}`); continue; }
       const headings = extractHeadings(html);
-      if (headings.length === 0) failedArticles.push(`article${num}（見出で0件）`);
+      if (headings.length === 0) failedArticles.push(`step${num}（見出し0件）`);
       headings.forEach(({ tag, text }) => {
-        state.headlines.push({ id: idCounter++, tag, text, source: `article${num}`, url: pageUrl });
+        state.headlines.push({ id: idCounter++, tag, text, source: `step${num}`, url: pageUrl });
       });
     }
 
     if (state.headlines.length === 0) {
-      const detail = failedArticles.length > 0 ? `\n失敗した記事: ${failedArticles.join(', ')}` : '';
-      throw new Error('選択した記事から見出し（h2～h4）を取得できませんでした。' + detail);
+      const detail = failedArticles.length > 0 ? `\n失敗したステップ: ${failedArticles.join(', ')}` : '';
+      throw new Error('選択したステップから見出し（h2～h4）を取得できませんでした。' + detail);
     }
-    if (failedArticles.length > 0) showError(`以下の記事の取得に失敗しました:\n${failedArticles.join(', ')}`);
+    if (failedArticles.length > 0) showError(`以下のステップの取得に失敗しました:\n${failedArticles.join(', ')}`);
 
     renderHeadlines();
     resultCard.removeAttribute('hidden');
