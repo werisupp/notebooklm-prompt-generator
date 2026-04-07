@@ -359,7 +359,7 @@ function buildPrompt(headlines, startNum) {
   lines.push('　-グリーン：#28A745');
   lines.push('　-ダークグリーン：#218838');
   lines.push('・背景・テキスト：');
-  lines.push('　-全体背景：#FFFFFF（純白）');
+  lines.push('　-全体背景：#EEF4FB（薄いブルーホワイト）');
   lines.push('　-カードの淡い背景：#F8F9FA（light）、#E9ECEF（medium）');
   lines.push('　-文字メイン：#333333');
   lines.push('　-文字サブ：#6C757D');
